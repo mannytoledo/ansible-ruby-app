@@ -1,0 +1,47 @@
+---
+- name: rails_user // create the user
+  user:
+    name: rails
+    state: present
+  remote_user: centos
+  sudo: yes
+
+- name: rbenv // copy rbenv bash plugin
+  template:
+    src: rbenv.sh.j2
+    dest: /home/rails/.bashrc.d/rbenv.sh
+    mode: 0644
+  tags: rbenv
+
+- yum: 
+    name: "{{ rbenv_packages | join(',') }}"
+
+- git: 
+    dest: "{{ rbenv_root }}"
+    repo: https://github.com/sstephenson/rbenv depth=1
+
+- git: 
+    dest: "{{ rbenv_root }}/plugins/ruby-build"
+    repo: https://github.com/sstephenson/ruby-build depth=1
+
+- name: Check Ruby Installed
+  shell: "rbenv versions| grep {{ rbenv_ruby_version }}"
+  register: ruby_installed
+  ignore_errors: yes
+
+- name: Install Ruby
+  shell: rbenv install "{{ rbenv_ruby_version }}"
+  when: ruby_installed|failed
+  notify: rbenv rehash
+  
+- name: Set Global Ruby
+  shell: rbenv global "{{ rbenv_ruby_version }}"
+
+- name: Update Rubygems
+  shell: gem update --system
+
+- name: Install Bundler
+  shell: gem install bundler
+ 
+
+

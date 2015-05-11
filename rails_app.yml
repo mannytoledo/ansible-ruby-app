@@ -1,0 +1,102 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: False
+
+  tasks:
+    - name: Create VPC
+      ec2_vpc:
+        state: present
+        cidr_block: 172.22.0.0/16
+        subnets:
+          - cidr: 172.22.1.0/24
+            az: us-east-1a
+            resource_tags: { "Environment":"Dev", "Tier" : "Web_1" }
+          - cidr: 172.22.2.0/24
+            az: us-east-1c
+            resource_tags: { "Environment":"Dev", "Tier" : "Web_2" }
+          - cidr: 172.22.3.0/24
+            az: us-east-1d
+            resource_tags: { "Environment":"Dev", "Tier" : "DB" }
+        resource_tags: { "Environment":"Devlopment" }
+        internet_gateway: yes
+        route_tables:
+          - subnets:
+              - 172.22.1.0/24
+              - 172.22.2.0/24
+              - 172.22.3.0/24
+            routes:
+              - dest: 0.0.0.0/0
+                gw: igw
+        region: us-east-1
+      register: vpc
+        
+
+    - name: Create security groups
+      ec2_group:
+        name: webserver
+        description: For webservers
+        region: us-east-1
+        vpc_id: "{{ vpc.vpc_id }}"
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+
+    - name: Create ELB
+      ec2_elb_lb:
+        name: "railsweb"
+        state: present
+        subnets: 
+          - "{{ vpc.subnets[0].id }}"
+          - "{{ vpc.subnets[1].id }}"
+        listeners:
+          - protocol: http
+            load_balancer_port: 80
+            instance_port: 80
+        health_check:
+            ping_protocol: http
+            ping_port: 80
+            ping_path: "/index.html"
+            response_timeout: 5
+            interval: 30
+            unhealthy_threshold: 2
+            healthy_threshold: 10
+
+    - name: Provision a set of instances
+      ec2:
+        key_name: mtoledo_adobe
+        instance_type: t2.micro
+        assign_public_ip: yes
+        region: us-east-1
+        vpc_subnet_id: "{{ vpc.subnets[0].id }}"
+        state: present
+        image: ami-96a818fe
+        wait: yes
+        group: webserver
+        count: 3
+        instance_tags:
+          Name: web_ansible
+      register: ec2
+
+    - name: Add all instance public IPs to host group
+      add_host: hostname={{ item.public_ip }} groups=webhosts
+      with_items: ec2.instances
+
+    - name: Wait for SSH to come up
+      wait_for: host={{ item.public_dns_name }} port=22 delay=60 timeout=320 state=started
+      with_items: ec2.instances
+
+- hosts: webhosts
+  name: configuration play
+  remote_user: centos
+  sudo: yes
+  gather_facts: true
+  roles:
+    - webservers
+
